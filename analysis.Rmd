@@ -1,0 +1,28 @@
+---
+title: "Analysis"
+author: "Danylo Kravchuk"
+date: "2024-08-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library}
+library(recount3)
+library(tidyverse)
+```
+
+```{r data}
+(rse <- recount3::create_rse_manual(
+    project = "SRP174505",
+    project_home = "data_sources/sra",
+    organism = "human",
+    annotation = "gencode_v26",
+    type = "gene"
+))
+```
+
+
+
