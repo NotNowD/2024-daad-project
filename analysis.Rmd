@@ -15,13 +15,30 @@ library(tidyverse)
 ```
 
 ```{r data}
-(rse <- recount3::create_rse_manual(
+# Список проєктів у кеші
+projects <- recount3::available_projects()
+
+# Завантаження проєкту з хмари або з кешу
+if ("SRP174505" %in% projects) {
+  rse <- recount3::create_rse_manual(
     project = "SRP174505",
     project_home = "data_sources/sra",
     organism = "human",
     annotation = "gencode_v26",
     type = "gene"
-))
+  )
+  
+} else {
+  rse <- recount3::create_rse_manual(
+    project = "SRP174505",
+    project_home = "data_sources/sra",
+    organism = "human",
+    annotation = "gencode_v26",
+    type = "gene"
+  )
+}
+
+rse
 ```
 
 
