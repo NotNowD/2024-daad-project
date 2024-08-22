@@ -1,6 +1,6 @@
 ---
 title: "Analysis"
-author: "Danylo Kravchuk"
+author: "K-6"
 date: "2024-08-14"
 output: html_document
 ---
@@ -9,9 +9,12 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r library}
-library(recount3)
+```{r library, include=FALSE}
 library(tidyverse)
+library(conflicted)
+library(recount3)
+
+walk(c("select", "filter"), ~ conflict_prefer(.x, "dplyr")) # walk з purr
 ```
 
 ```{r data}
