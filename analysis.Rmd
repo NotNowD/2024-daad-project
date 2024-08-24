@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r library, include=FALSE}
+library(readr)
 library(tidyverse)
 library(conflicted)
 library(recount3)
@@ -42,6 +43,14 @@ if ("SRP174505" %in% projects) {
 }
 
 rse
+```
+```{r}
+rse_colData<- as.data.frame(colData(rse))
+rse_rowData<- as.data.frame(rowData(rse))
+rse_assay <- assay(rse)
+write_delim(rse_colData, "./data/rse_colData.csv", delim = ";", col_names = TRUE)
+write_delim(rse_rowData, "./data/rse_rowData.csv", delim = ";", col_names = TRUE)
+write_delim(rse_rowData, "./data/rse_assay.csv", delim = ";", col_names = TRUE)
 ```
 
 

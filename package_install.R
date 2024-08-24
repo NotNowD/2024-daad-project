@@ -10,6 +10,7 @@ install_if_missing <- function(package_name, bioconductor = FALSE) {
   library(package_name, character.only = TRUE)
 }
 
+install_if_missing("readr")
 install_if_missing("tidyverse")
 install_if_missing("conflicted")
 install_if_missing("BiocManager")
