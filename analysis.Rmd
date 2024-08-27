@@ -12,10 +12,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r library, include=FALSE}
 library(readr)
 library(tidyverse)
+library(scales)
 library(conflicted)
 library(recount3)
+library(DESeq2)
 
-walk(c("select", "filter"), ~ conflict_prefer(.x, "dplyr")) # walk з purr
+walk(c("select", "filter", "count", "rename"), ~ conflict_prefer(.x, "dplyr")) # walk з purr
 ```
 
 ```{r data}
@@ -44,13 +46,301 @@ if ("SRP174505" %in% projects) {
 
 rse
 ```
-```{r}
+```{r rse export}
 rse_colData<- as.data.frame(colData(rse))
 rse_rowData<- as.data.frame(rowData(rse))
 rse_assay <- assay(rse)
 write_delim(rse_colData, "./data/rse_colData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_rowData, "./data/rse_rowData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_rowData, "./data/rse_assay.csv", delim = ";", col_names = TRUE)
+```
+
+ Колонка "sra.sample_title" вказує на зразки, які є контрольними (0Gy) та ті, що зазнали опромінення (2Gy, 4Gy).
+```{r pre-analysis visualisation}
+# Створення таблиці метаданих
+colData_new <- data.frame(
+  row.names = colnames(rse),
+  condition = factor(c(rep("0Gy", 3), rep("2Gy", 3), rep("4Gy", 3)))
+)
+
+# Матриця counts
+countData <- assay(rse)
+
+# Побудова графіку щільності
+ggplot(countData, aes(x = SRR8371688 )) +
+  geom_density(color = "darkblue", fill = "lightblue")
+
+count_summary <- countData |>
+  as.vector() |>
+  data.frame(counts = _) |>
+  group_by(counts) |>
+  summarise(frequency = n(), .groups = 'drop') |>
+  arrange(counts)
+
+
+# Створення гістограми частоти значень
+ggplot(count_summary[1:200,], aes(x = counts, y = frequency, fill = frequency)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  scale_y_log10(labels = scales::comma) +
+  labs(title = "Histogram of Counts vs Frequency (Logarithmic Scale)",
+       x = "Counts",
+       y = "Frequency (log10)") +
+  scale_fill_gradient(low = "#AA05BA", high = "#56B1F7") +
+  theme_minimal()
+
+```
+
+```{r deseq}
+# Створіть DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = countData,
+                              colData = colData_new,
+                              design = ~ condition)
+dds <- dds[rowSums(counts(dds)) > 0, ]
+vsd <- vst(dds)
+dds_simple <- DESeq(dds)
+
+nrow(counts(dds_simple))
+
+res <- results(dds_simple)
+summary(res)
+
+# Фільтрація значущих генів з порогом для log2FoldChange
+res_sig <- res[which(res$padj < 0.05 & abs(res$log2FoldChange) > 1.5), ]
+res_sig
+write.csv(res_sig, "./data/significant_genes.csv", row.names = TRUE)
+
+```
+
+```{r deseq visualization}
+res_2Gy_vs_0Gy <- results(dds_simple, contrast = c("condition", "2Gy", "0Gy"))
+res_4Gy_vs_0Gy <- results(dds_simple, contrast = c("condition", "4Gy", "0Gy"))
+res_4Gy_vs_2Gy <- results(dds_simple, contrast = c("condition", "4Gy", "2Gy"))
+
+plotMA(res_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
+plotMA(res_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
+plotMA(res_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
+
+
+res_df_2Gy_vs_0Gy <- as.data.frame(res_2Gy_vs_0Gy)
+res_df_4Gy_vs_0Gy <- as.data.frame(res_4Gy_vs_0Gy)
+res_df_4Gy_vs_2Gy <- as.data.frame(res_4Gy_vs_2Gy)
+
+res_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
+res_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
+res_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
+
+combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
+combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
+combined_v_df <- combined_df
+combined_df <- combined_wald_df[combined_wald_df$significant == TRUE, ]
+
+ggplot(combined_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  scale_x_log10() + 
+  labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
+  theme_minimal() +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme(legend.title = element_blank()) +
+  facet_wrap(~ comparison)
+```
+```{r volcano deseq visualization}
+# Додаємо -log10(p-value) та позначаємо значущість
+combined_v_df <- combined_v_df %>%
+  mutate(neg_log10_pvalue = -log10(padj),
+         significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
+
+# Побудова volcano plot
+ggplot(combined_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  facet_wrap(~comparison) + 
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme_minimal() +
+  labs(
+    x = "Log2 Fold Change",
+    y = "-Log10(Adjusted P-value)",
+    color = "Comparison",
+    title = "Volcano Plot by Condition"
+  ) +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
+```
+
+```{r, fig.height=5,fig.width=10}
+# Теплова карта для топ-генів
+library(pheatmap)
+top_genes <- head(order(res$padj), 30) # Вибір топ-генів на основі p-значень
+pheatmap(assay(dds)[top_genes, ], cluster_rows=TRUE, cluster_cols=TRUE)
+```
+
+Differential testing: multigroup
+```{r}
+dds_wald <- dds[rowSums(counts(dds)) > 0, ]
+
+dds_wald <- DESeq(dds, test="Wald")
+res_wald <- results(dds_wald)
+
+res_sig_wald  <- res_wald[which(res_wald$padj < 0.05 & abs(res_wald$log2FoldChange) > 1.5), ]
+
+res_wald_df <- as.data.frame(res_sig_wald )
+
+# Додавання груп, виходячи з напрямку log2FoldChange
+res_wald_df$condition <- ifelse(res_wald_df$log2FoldChange > 0, "Upregulated", "Downregulated")
+
+# Побудова MA-графіка
+ggplot(res_wald_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
+  geom_point(alpha = 0.4, size = 1.5) +
+  scale_x_log10() + 
+  labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
+  theme_minimal() +
+  scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue")) +
+  theme(legend.title = element_blank())
+```
+
+```{r}
+dds_lrt <- DESeq(dds, test = "LRT", reduced = ~1)
+
+res_lrt <- results(dds_lrt)
+
+res_sig_lrt <- res_lrt[which(res_lrt$padj < 0.05 & abs(res_lrt$log2FoldChange) > 1.5), ]
+
+res_lrt_df <- as.data.frame(res_sig_lrt)
+
+res_lrt_df$condition <- ifelse(res_lrt_df$log2FoldChange > 0, "Upregulated", "Downregulated")
+
+ggplot(res_lrt_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
+  geom_point(alpha = 0.4, size = 1.5) +
+  scale_x_log10() +
+  labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
+  theme_minimal() +
+  scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue")) +
+  theme(legend.title = element_blank())
+```
+
+
+```{r deseq visualization Wald}
+res_wald_2Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "2Gy", "0Gy"))
+res_wald_4Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "4Gy", "0Gy"))
+res_wald_4Gy_vs_2Gy <- results(dds_wald, contrast = c("condition", "4Gy", "2Gy"))
+
+plotMA(res_wald_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
+plotMA(res_wald_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
+plotMA(res_wald_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
+
+
+res_wald_df_2Gy_vs_0Gy <- as.data.frame(res_wald_2Gy_vs_0Gy)
+res_wald_df_2Gy_vs_0Gy$significant <- res_wald_df_2Gy_vs_0Gy$padj < 0.05
+
+res_wald_df_4Gy_vs_0Gy <- as.data.frame(res_wald_4Gy_vs_0Gy)
+res_wald_df_4Gy_vs_0Gy$significant <- res_wald_df_4Gy_vs_0Gy$padj < 0.05
+
+res_wald_df_4Gy_vs_2Gy <- as.data.frame(res_wald_4Gy_vs_2Gy)
+res_wald_df_4Gy_vs_2Gy$significant <- res_wald_df_4Gy_vs_2Gy$padj < 0.05
+
+res_wald_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
+res_wald_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
+res_wald_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
+
+combined_wald_df <- rbind(res_wald_df_2Gy_vs_0Gy, res_wald_df_4Gy_vs_0Gy, res_wald_df_4Gy_vs_2Gy)
+combined_wald_v_df <- combined_wald_df
+combined_wald_df <- combined_wald_df[combined_wald_df$significant == TRUE, ]
+
+ggplot(combined_wald_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+  geom_point(alpha = 0.3, size = 1.5) +
+  scale_x_log10() + 
+  labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
+  theme_minimal() +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme(legend.title = element_blank()) +
+  facet_wrap(~ comparison)
+
+# Додаємо -log10(p-value) та позначаємо значущість
+combined_wald_v_df <- combined_wald_v_df %>%
+  mutate(neg_log10_pvalue = -log10(padj),
+         significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
+
+# Побудова volcano plot
+ggplot(combined_wald_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  facet_wrap(~comparison) +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme_minimal() +
+  labs(
+    x = "Log2 Fold Change",
+    y = "-Log10(Adjusted P-value)",
+    color = "Comparison",
+    title = "Volcano Plot by Condition"
+  ) +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
+```
+
+```{r deseq visualization LRT}
+res_lrt_2Gy_vs_0Gy <- results(dds_lrt, contrast = c("condition", "2Gy", "0Gy"))
+res_lrt_4Gy_vs_0Gy <- results(dds_lrt, contrast = c("condition", "4Gy", "0Gy"))
+res_lrt_4Gy_vs_2Gy <- results(dds_lrt, contrast = c("condition", "4Gy", "2Gy"))
+
+plotMA(res_lrt_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
+
+plotMA(res_lrt_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
+
+plotMA(res_lrt_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
+
+
+res_lrt_df_2Gy_vs_0Gy <- as.data.frame(res_lrt_2Gy_vs_0Gy)
+res_lrt_df_2Gy_vs_0Gy$significant <- res_lrt_df_2Gy_vs_0Gy$padj < 0.05
+res_lrt_df_4Gy_vs_0Gy <- as.data.frame(res_lrt_4Gy_vs_0Gy)
+res_lrt_df_4Gy_vs_0Gy$significant <- res_lrt_df_4Gy_vs_0Gy$padj < 0.05
+res_lrt_df_4Gy_vs_2Gy <- as.data.frame(res_lrt_4Gy_vs_2Gy)
+res_lrt_df_4Gy_vs_2Gy$significant <- res_lrt_df_4Gy_vs_2Gy$padj < 0.05
+
+res_lrt_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
+res_lrt_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
+res_lrt_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
+
+combined_lrt_df <- rbind(res_lrt_df_2Gy_vs_0Gy, res_lrt_df_4Gy_vs_0Gy, res_lrt_df_4Gy_vs_2Gy)
+combined_lrt_v_df <- combined_lrt_df
+combined_lrt_df <- combined_lrt_df[combined_lrt_df$significant == TRUE, ]
+
+ggplot(combined_lrt_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  scale_x_log10() + 
+  labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
+  theme_minimal() +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme(legend.title = element_blank()) +
+  facet_wrap(~ comparison)
+
+# Додаємо -log10(p-value) та позначаємо значущість
+combined_lrt_v_df <- combined_lrt_v_df %>%
+  mutate(neg_log10_pvalue = -log10(padj),
+         significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
+
+# Побудова volcano plot
+ggplot(combined_lrt_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  facet_wrap(~comparison) +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
+  theme_minimal() +
+  labs(
+    x = "Log2 Fold Change",
+    y = "-Log10(Adjusted P-value)",
+    color = "Comparison",
+    title = "Volcano Plot by Condition"
+  ) +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
 ```
 
 

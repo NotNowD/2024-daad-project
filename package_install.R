@@ -13,6 +13,7 @@ install_if_missing <- function(package_name, bioconductor = FALSE) {
 install_if_missing("readr")
 install_if_missing("tidyverse")
 install_if_missing("conflicted")
+install_if_missing("scales")
 install_if_missing("BiocManager")
 install_if_missing("recount3", bioconductor = TRUE)
 install_if_missing("DESeq2", bioconductor = TRUE)
