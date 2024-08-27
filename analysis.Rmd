@@ -12,10 +12,15 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r library, include=FALSE}
 library(readr)
 library(tidyverse)
+library(ggrepel)
+library(patchwork)
+library(grid)
+library(pheatmap)
 library(scales)
 library(conflicted)
 library(recount3)
 library(DESeq2)
+library(EnhancedVolcano)
 
 walk(c("select", "filter", "count", "rename"), ~ conflict_prefer(.x, "dplyr")) # walk з purr
 ```
@@ -50,6 +55,17 @@ rse
 rse_colData<- as.data.frame(colData(rse))
 rse_rowData<- as.data.frame(rowData(rse))
 rse_assay <- assay(rse)
+gene_annotations <- as.data.frame(rowData(rse)[c("gene_id", "gene_name")])
+gene_annotations_unique <- gene_annotations[!duplicated(gene_annotations$gene_name), ]
+make_unique_names <- function(df, id_col, name_col) {
+  df %>%
+    rownames_to_column(var = id_col) %>%
+    left_join(gene_annotations, by = id_col) %>%
+    mutate(!!name_col := ifelse(is.na(.data[[name_col]]), .data[[id_col]], .data[[name_col]])) %>%
+    mutate(!!name_col := make.unique(as.character(.data[[name_col]]))) %>%
+    column_to_rownames(var = name_col)
+}
+
 write_delim(rse_colData, "./data/rse_colData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_rowData, "./data/rse_rowData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_rowData, "./data/rse_assay.csv", delim = ";", col_names = TRUE)
@@ -67,7 +83,7 @@ colData_new <- data.frame(
 countData <- assay(rse)
 
 # Побудова графіку щільності
-ggplot(countData, aes(x = SRR8371688 )) +
+p1 <- ggplot(countData, aes(x = SRR8371688 )) +
   geom_density(color = "darkblue", fill = "lightblue")
 
 count_summary <- countData |>
@@ -79,7 +95,7 @@ count_summary <- countData |>
 
 
 # Створення гістограми частоти значень
-ggplot(count_summary[1:200,], aes(x = counts, y = frequency, fill = frequency)) +
+p2 <- ggplot(count_summary[1:200,], aes(x = counts, y = frequency, fill = frequency)) +
   geom_bar(stat = "identity", width = 0.7) +
   scale_y_log10(labels = scales::comma) +
   labs(title = "Histogram of Counts vs Frequency (Logarithmic Scale)",
@@ -87,7 +103,11 @@ ggplot(count_summary[1:200,], aes(x = counts, y = frequency, fill = frequency)) 
        y = "Frequency (log10)") +
   scale_fill_gradient(low = "#AA05BA", high = "#56B1F7") +
   theme_minimal()
+p1
+p2
+counts_info <- p1 + p2
 
+ggsave("./figs/counts_info.png", plot = counts_info, width = 16, height = 6, dpi = 300)
 ```
 
 ```{r deseq}
@@ -116,10 +136,16 @@ res_2Gy_vs_0Gy <- results(dds_simple, contrast = c("condition", "2Gy", "0Gy"))
 res_4Gy_vs_0Gy <- results(dds_simple, contrast = c("condition", "4Gy", "0Gy"))
 res_4Gy_vs_2Gy <- results(dds_simple, contrast = c("condition", "4Gy", "2Gy"))
 
+png("./figs/deseq_simple.png", width = 2400, height = 800)
+
+par(mfrow = c(1, 3), mar = c(5, 5, 4, 2))
+
 plotMA(res_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
 plotMA(res_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
-plotMA(res_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
+plotMA(res_4Gy_vs_2Gy, ylim=c(-40,40), main="MA-plot: 2Gy vs 4Gy")
 
+dev.off()
+knitr::include_graphics("./figs/deseq_simple.png")
 
 res_df_2Gy_vs_0Gy <- as.data.frame(res_2Gy_vs_0Gy)
 res_df_4Gy_vs_0Gy <- as.data.frame(res_4Gy_vs_0Gy)
@@ -129,49 +155,102 @@ res_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
 res_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
 res_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
 
+res_df_2Gy_vs_0Gy <- as.data.frame(res_df_2Gy_vs_0Gy) %>%
+  mutate(comparison = "2Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_0Gy
+res_df_4Gy_vs_0Gy <- as.data.frame(res_df_4Gy_vs_0Gy) %>%
+  mutate(comparison = "4Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_2Gy
+res_df_4Gy_vs_2Gy <- as.data.frame(res_df_4Gy_vs_2Gy) %>%
+  mutate(comparison = "4Gy vs 2Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
 combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
 combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
 combined_v_df <- combined_df
+#combined_df <- combined_df |> filter(!is.na(comparison)) |> droplevels()
 combined_df <- combined_wald_df[combined_wald_df$significant == TRUE, ]
 
-ggplot(combined_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+# Очистити непотрібні рівні факторів
+combined_df_clean <- combined_df %>%
+  filter(!is.na(comparison) & significant == TRUE)
+
+pl1 <- ggplot(combined_df_clean, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
   geom_point(alpha = 0.5, size = 1.5) +
   scale_x_log10() + 
   labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
   theme_minimal() +
   scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme(legend.title = element_blank()) +
-  facet_wrap(~ comparison)
+  theme(
+    legend.title = element_blank(),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")  
+  ) +
+  facet_wrap(~ comparison, nrow = 1, drop = TRUE)
+pl1
+ggsave("./figs/deseq_simple_sig.png", plot = pl1, width = 16, height = 6, dpi = 300)
 ```
+
 ```{r volcano deseq visualization}
-# Додаємо -log10(p-value) та позначаємо значущість
+
 combined_v_df <- combined_v_df %>%
   mutate(neg_log10_pvalue = -log10(padj),
          significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
 
-# Побудова volcano plot
-ggplot(combined_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
-  geom_point(alpha = 0.6, size = 1.5) +
-  facet_wrap(~comparison) + 
-  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme_minimal() +
-  labs(
-    x = "Log2 Fold Change",
-    y = "-Log10(Adjusted P-value)",
-    color = "Comparison",
-    title = "Volcano Plot by Condition"
-  ) +
-  theme(
-    axis.line = element_line(color = "black"),
-    axis.ticks = element_line(color = "black")
-  ) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
-  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
+
+plot_2Gy_vs_0Gy <- EnhancedVolcano(res_df_2Gy_vs_0Gy,
+                                   lab = rownames(res_df_2Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '2Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_0Gy <- EnhancedVolcano(res_df_4Gy_vs_0Gy,
+                                   lab = rownames(res_df_4Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_2Gy <- EnhancedVolcano(res_df_4Gy_vs_2Gy,
+                                   lab = rownames(res_df_4Gy_vs_2Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 2Gy',
+                                   legendPosition = 'top')
+volc_simple_plot <- plot_2Gy_vs_0Gy + plot_4Gy_vs_0Gy + plot_4Gy_vs_2Gy + plot_layout(nrow = 1)
+
+print(volc_simple_plot)
+ggsave("./figs/volc_simple.png", plot = volc_simple_plot, width = 20, height = 6, dpi = 300)
 ```
 
 ```{r, fig.height=5,fig.width=10}
 # Теплова карта для топ-генів
-library(pheatmap)
 top_genes <- head(order(res$padj), 30) # Вибір топ-генів на основі p-значень
 pheatmap(assay(dds)[top_genes, ], cluster_rows=TRUE, cluster_cols=TRUE)
 ```
@@ -191,13 +270,18 @@ res_wald_df <- as.data.frame(res_sig_wald )
 res_wald_df$condition <- ifelse(res_wald_df$log2FoldChange > 0, "Upregulated", "Downregulated")
 
 # Побудова MA-графіка
-ggplot(res_wald_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
+pl2 <- ggplot(res_wald_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
   geom_point(alpha = 0.4, size = 1.5) +
   scale_x_log10() + 
   labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
   theme_minimal() +
   scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue")) +
-  theme(legend.title = element_blank())
+  theme(
+    legend.title = element_blank(),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white"))
+pl2
+ggsave("./figs/deseq_wald_test.png", plot = pl2, width = 16, height = 6, dpi = 300)
 ```
 
 ```{r}
@@ -211,13 +295,18 @@ res_lrt_df <- as.data.frame(res_sig_lrt)
 
 res_lrt_df$condition <- ifelse(res_lrt_df$log2FoldChange > 0, "Upregulated", "Downregulated")
 
-ggplot(res_lrt_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
+pl3 <- ggplot(res_lrt_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
   geom_point(alpha = 0.4, size = 1.5) +
   scale_x_log10() +
   labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
   theme_minimal() +
   scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue")) +
-  theme(legend.title = element_blank())
+  theme(
+    legend.title = element_blank(),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white"))
+pl3
+ggsave("./figs/deseq_lrt_test.png", plot = pl3, width = 16, height = 6, dpi = 300)
 ```
 
 
@@ -226,10 +315,14 @@ res_wald_2Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "2Gy", "0Gy")
 res_wald_4Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "4Gy", "0Gy"))
 res_wald_4Gy_vs_2Gy <- results(dds_wald, contrast = c("condition", "4Gy", "2Gy"))
 
+png("./figs/deseq_Wald.png", width = 2400, height = 800)
+
+par(mfrow = c(1, 3), mar = c(5, 5, 4, 2))
 plotMA(res_wald_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
 plotMA(res_wald_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
 plotMA(res_wald_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
-
+dev.off()
+knitr::include_graphics("./figs/deseq_Wald.png")
 
 res_wald_df_2Gy_vs_0Gy <- as.data.frame(res_wald_2Gy_vs_0Gy)
 res_wald_df_2Gy_vs_0Gy$significant <- res_wald_df_2Gy_vs_0Gy$padj < 0.05
@@ -244,18 +337,41 @@ res_wald_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
 res_wald_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
 res_wald_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
 
+res_wald_df_2Gy_vs_0Gy <- as.data.frame(res_wald_df_2Gy_vs_0Gy) %>%
+  mutate(comparison = "2Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_0Gy
+res_wald_df_4Gy_vs_0Gy <- as.data.frame(res_wald_df_4Gy_vs_0Gy) %>%
+  mutate(comparison = "4Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_2Gy
+res_wald_df_4Gy_vs_2Gy <- as.data.frame(res_wald_df_4Gy_vs_2Gy) %>%
+  mutate(comparison = "4Gy vs 2Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
 combined_wald_df <- rbind(res_wald_df_2Gy_vs_0Gy, res_wald_df_4Gy_vs_0Gy, res_wald_df_4Gy_vs_2Gy)
 combined_wald_v_df <- combined_wald_df
 combined_wald_df <- combined_wald_df[combined_wald_df$significant == TRUE, ]
 
-ggplot(combined_wald_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+# Очистити непотрібні рівні факторів
+combined_wald_df_clean <- combined_wald_df %>%
+  filter(!is.na(comparison) & significant == TRUE)
+
+pl4 <- ggplot(combined_wald_df_clean, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
   geom_point(alpha = 0.3, size = 1.5) +
   scale_x_log10() + 
   labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
   theme_minimal() +
   scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme(legend.title = element_blank()) +
-  facet_wrap(~ comparison)
+  theme(
+    legend.title = element_blank(),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")) +
+  facet_wrap(~ comparison, nrow = 1)
+pl4
+ggsave("./figs/deseq_wald_sig.png", plot = pl4, width = 16, height = 6, dpi = 300)
 
 # Додаємо -log10(p-value) та позначаємо значущість
 combined_wald_v_df <- combined_wald_v_df %>%
@@ -263,23 +379,51 @@ combined_wald_v_df <- combined_wald_v_df %>%
          significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
 
 # Побудова volcano plot
-ggplot(combined_wald_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
-  geom_point(alpha = 0.6, size = 1.5) +
-  facet_wrap(~comparison) +
-  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme_minimal() +
-  labs(
-    x = "Log2 Fold Change",
-    y = "-Log10(Adjusted P-value)",
-    color = "Comparison",
-    title = "Volcano Plot by Condition"
-  ) +
-  theme(
-    axis.line = element_line(color = "black"),
-    axis.ticks = element_line(color = "black")
-  ) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
-  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
+plot_2Gy_vs_0Gy_W <- EnhancedVolcano(res_wald_df_2Gy_vs_0Gy,
+                                   lab = rownames(res_wald_df_2Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '2Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_0Gy_W <- EnhancedVolcano(res_wald_df_4Gy_vs_0Gy,
+                                   lab = rownames(res_wald_df_4Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_2Gy_W <- EnhancedVolcano(res_wald_df_4Gy_vs_2Gy,
+                                   lab = rownames(res_wald_df_4Gy_vs_2Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 2Gy',
+                                   legendPosition = 'top')
+volc_wald_plot <- plot_2Gy_vs_0Gy_W + plot_4Gy_vs_0Gy_W + plot_4Gy_vs_2Gy_W + plot_layout(nrow = 1)
+
+print(volc_wald_plot)
+ggsave("./figs/volc_wald.png", plot = volc_wald_plot, width = 20, height = 6, dpi = 300)
 ```
 
 ```{r deseq visualization LRT}
@@ -287,12 +431,13 @@ res_lrt_2Gy_vs_0Gy <- results(dds_lrt, contrast = c("condition", "2Gy", "0Gy"))
 res_lrt_4Gy_vs_0Gy <- results(dds_lrt, contrast = c("condition", "4Gy", "0Gy"))
 res_lrt_4Gy_vs_2Gy <- results(dds_lrt, contrast = c("condition", "4Gy", "2Gy"))
 
+png("./figs/deseq_LRT.png", width = 2400, height = 800)
+
 plotMA(res_lrt_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
-
 plotMA(res_lrt_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
-
 plotMA(res_lrt_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
-
+dev.off()
+knitr::include_graphics("./figs/deseq_LRT.png")
 
 res_lrt_df_2Gy_vs_0Gy <- as.data.frame(res_lrt_2Gy_vs_0Gy)
 res_lrt_df_2Gy_vs_0Gy$significant <- res_lrt_df_2Gy_vs_0Gy$padj < 0.05
@@ -305,18 +450,41 @@ res_lrt_df_2Gy_vs_0Gy$comparison <- "2Gy vs 0Gy"
 res_lrt_df_4Gy_vs_0Gy$comparison <- "4Gy vs 0Gy"
 res_lrt_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
 
+res_lrt_df_2Gy_vs_0Gy <- as.data.frame(res_lrt_df_2Gy_vs_0Gy) %>%
+  mutate(comparison = "2Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_0Gy
+res_lrt_df_4Gy_vs_0Gy <- as.data.frame(res_lrt_df_4Gy_vs_0Gy) %>%
+  mutate(comparison = "4Gy vs 0Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
+# Оновлення res_df_4Gy_vs_2Gy
+res_lrt_df_4Gy_vs_2Gy <- as.data.frame(res_lrt_df_4Gy_vs_2Gy) %>%
+  mutate(comparison = "4Gy vs 2Gy") %>%
+  make_unique_names("gene_id", "gene_name")
+
 combined_lrt_df <- rbind(res_lrt_df_2Gy_vs_0Gy, res_lrt_df_4Gy_vs_0Gy, res_lrt_df_4Gy_vs_2Gy)
 combined_lrt_v_df <- combined_lrt_df
 combined_lrt_df <- combined_lrt_df[combined_lrt_df$significant == TRUE, ]
 
-ggplot(combined_lrt_df, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
+# Очистити непотрібні рівні факторів
+combined_lrt_df_clean <- combined_lrt_df %>%
+  filter(!is.na(comparison) & significant == TRUE)
+
+pl5 <- ggplot(combined_lrt_df_clean, aes(x = baseMean, y = log2FoldChange, color = comparison)) +
   geom_point(alpha = 0.5, size = 1.5) +
   scale_x_log10() + 
   labs(x = "Mean of Normalized Counts", y = "Log2 Fold Change") +
   theme_minimal() +
   scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme(legend.title = element_blank()) +
-  facet_wrap(~ comparison)
+  theme(
+    legend.title = element_blank(),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")) +
+  facet_wrap(~ comparison, nrow = 1, drop = TRUE)
+pl5
+ggsave("./figs/deseq_lrt_sig.png", plot = pl5, width = 16, height = 6, dpi = 300)
 
 # Додаємо -log10(p-value) та позначаємо значущість
 combined_lrt_v_df <- combined_lrt_v_df %>%
@@ -324,23 +492,51 @@ combined_lrt_v_df <- combined_lrt_v_df %>%
          significant = ifelse(padj < 0.05 & abs(log2FoldChange) > 1.5, "Yes", "No"))
 
 # Побудова volcano plot
-ggplot(combined_lrt_v_df, aes(x = log2FoldChange, y = neg_log10_pvalue, color = comparison)) +
-  geom_point(alpha = 0.6, size = 1.5) +
-  facet_wrap(~comparison) +
-  scale_color_manual(values = c("2Gy vs 0Gy" = "blue", "4Gy vs 0Gy" = "green", "4Gy vs 2Gy" = "red")) +
-  theme_minimal() +
-  labs(
-    x = "Log2 Fold Change",
-    y = "-Log10(Adjusted P-value)",
-    color = "Comparison",
-    title = "Volcano Plot by Condition"
-  ) +
-  theme(
-    axis.line = element_line(color = "black"),
-    axis.ticks = element_line(color = "black")
-  ) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
-  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black")
+plot_2Gy_vs_0Gy_L <- EnhancedVolcano(res_lrt_df_2Gy_vs_0Gy,
+                                   lab = rownames(res_lrt_df_2Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '2Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_0Gy_L <- EnhancedVolcano(res_lrt_df_4Gy_vs_0Gy,
+                                   lab = rownames(res_lrt_df_4Gy_vs_0Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 0Gy',
+                                   legendPosition = 'top')
+
+plot_4Gy_vs_2Gy_L <- EnhancedVolcano(res_lrt_df_4Gy_vs_2Gy,
+                                   lab = rownames(res_lrt_df_4Gy_vs_2Gy),
+                                   x = 'log2FoldChange',
+                                   y = 'padj',
+                                   xlim = c(-30, 30),
+                                   ylim = c(0, 10),
+                                   pCutoff = 0.05,
+                                   FCcutoff = 1.5,
+                                   pointSize = 1.5,
+                                   labSize = 2.0,
+                                   col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                                   title = '4Gy vs 2Gy',
+                                   legendPosition = 'top')
+volc_lrt_plot <- plot_2Gy_vs_0Gy_L + plot_4Gy_vs_0Gy_L + plot_4Gy_vs_2Gy_L + plot_layout(nrow = 1)
+
+print(volc_lrt_plot)
+ggsave("./figs/volc_lrt.png", plot = volc_lrt_plot, width = 20, height = 6, dpi = 300)
 ```
 
 
