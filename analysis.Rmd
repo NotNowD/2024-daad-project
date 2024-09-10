@@ -167,22 +167,24 @@ res_df_4Gy_vs_2Gy$comparison <- "4Gy vs 2Gy"
 res_df_2Gy_vs_0Gy <- as.data.frame(res_df_2Gy_vs_0Gy) %>%
   mutate(comparison = "2Gy vs 0Gy") %>%
   make_unique_names("gene_id", "gene_name")
+res_df_2Gy_vs_0Gy$significant <- res_df_2Gy_vs_0Gy$padj < 0.05
 
 # Оновлення res_df_4Gy_vs_0Gy
 res_df_4Gy_vs_0Gy <- as.data.frame(res_df_4Gy_vs_0Gy) %>%
   mutate(comparison = "4Gy vs 0Gy") %>%
   make_unique_names("gene_id", "gene_name")
+res_df_4Gy_vs_0Gy$significant <- res_df_4Gy_vs_0Gy$padj < 0.05
 
 # Оновлення res_df_4Gy_vs_2Gy
 res_df_4Gy_vs_2Gy <- as.data.frame(res_df_4Gy_vs_2Gy) %>%
   mutate(comparison = "4Gy vs 2Gy") %>%
   make_unique_names("gene_id", "gene_name")
+res_df_4Gy_vs_2Gy$significant <- res_df_4Gy_vs_2Gy$padj < 0.05
 
-combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
 combined_df <- rbind(res_df_2Gy_vs_0Gy, res_df_4Gy_vs_0Gy, res_df_4Gy_vs_2Gy)
 combined_v_df <- combined_df
 #combined_df <- combined_df |> filter(!is.na(comparison)) |> droplevels()
-combined_df <- combined_wald_df[combined_wald_df$significant == TRUE, ]
+combined_df <- combined_df[combined_df$significant == TRUE, ]
 
 # Очистити непотрібні рівні факторів
 combined_df_clean <- combined_df %>%
