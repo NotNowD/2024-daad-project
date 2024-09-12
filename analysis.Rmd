@@ -125,7 +125,11 @@ dds <- DESeqDataSetFromMatrix(countData = countData,
                               design = ~ condition)
 #dds <- dds[rowSums(counts(dds)) > 5, ]
 dds <- dds[apply(counts(dds), 1, function(row) all(row > 5)), ]
-vsd <- vst(dds)
+vsd <- vst(dds, blind = FALSE)
+
+# Отримання матриці нормалізованих значень
+vst_data <- assay(vsd)
+
 dds_simple <- DESeq(dds)
 
 nrow(counts(dds_simple))
@@ -139,6 +143,26 @@ res_sig
 write.csv(res_sig, "./data/significant_genes.csv", row.names = TRUE)
 
 ```
+
+```{r PCA}
+# Виконання PCA
+pca <- prcomp(t(vst_data))
+
+# Збереження результатів PCA в таблицю
+pca_data <- data.frame(PC1 = pca$x[,1], PC2 = pca$x[,2], condition = colData_new$condition)
+
+# Візуалізація PCA за допомогою ggplot2
+ggplot(pca_data, aes(x = PC1, y = PC2, color = condition)) +
+  geom_point(size = 3) +
+  labs(title = "PCA of Gene Expression Data",
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  theme_minimal()
+
+plotPCA(vsd, intgroup = "condition") + 
+  labs(title = "PCA of Gene Expression Data (VST Transformed)")
+```
+
 
 ```{r deseq visualization}
 res_2Gy_vs_0Gy <- results(dds_simple, contrast = c("condition", "2Gy", "0Gy"))
