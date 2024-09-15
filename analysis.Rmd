@@ -341,7 +341,7 @@ pscree <- PCAtools::screeplot(pca_result,
     geom_label(aes(x = horn$n, y = 60,
       label = 'Horn\'s', vjust = -1, size = 8)) +
     geom_label(aes(x = elbow, y = 60,
-      label = 'Elbow method', vjust = -1, size = 8)) +
+      label = 'Elbow method', vjust = -3, size = 8)) +
     geom_label(aes(x = var_explained , y = 85,
       label = '80% explained variation', vjust = -1, size = 8)) 
 
@@ -351,7 +351,7 @@ ppairs <- PCAtools::pairsplot(pca_result,
     pointSize = 2,
     gridlines.major = FALSE, gridlines.minor = FALSE,
     colby = 'condition',
-    title = 'Pairs plot', plotaxes = TRUE,
+    plotaxes = TRUE,
     margingaps = unit(c(0.01, 0.01, 0.01, 0.01), 'cm'),
     returnPlot = FALSE)
 
@@ -367,6 +367,7 @@ rownames(pca_result$loadings) <- new_row_names
 
 
 pbiplot <- PCAtools::biplot(pca_result,
+    axisLabSize = 18,
     # loadings parameters
     showLoadings = TRUE,
     sizeLoadingsNames = 4,
@@ -384,34 +385,52 @@ pbiplot <- PCAtools::biplot(pca_result,
     gridlines.major = FALSE, gridlines.minor = FALSE,
     legendPosition = 'right', 
     legendLabSize = 16,
-    legendIconSize = 8.0,
-    title = 'PCA bi-plot',
+    legendIconSize = 8.0,,
     subtitle = 'PC1 versus PC2',
     caption = '5 PCs ≈ 80%',
     returnPlot = FALSE)
 
 ploadings <- PCAtools::plotloadings(pca_result,
-    title = 'Loadings plot',
-    axisLabSize = 12,
+    axisLabSize = 18,
     subtitle = 'PC1, PC2, PC3, PC4, PC5',
     labSize = 3,
     returnPlot = FALSE)
 
+
+# Використовуємо більше компонент для кластеризації, наприклад, перші 5
+set.seed(1234)
+km <- kmeans(x = pca_df[, 1:5], centers = 3, nstart = 25)  # Використовуємо 5 компонент і 25 запусків
+
+# Додаємо результати кластеризації в датафрейм
+pca_df$cluster <- as.factor(km$cluster)
+
+# Візуалізація
+pkmean <- autoplot(km, data = pca_df, frame = TRUE, frame.type = 'norm', size = 4, alpha = 0.6) + 
+  aes(shape = condition, color = cluster) + 
+  scale_shape_manual(values = c('0Gy' = 16, '2Gy' = 17, '4Gy' = 18)) + 
+  labs(subtitle = 'with 5 PCs',
+       color = 'cluster', shape = 'Condition') +
+  coord_equal() + 
+  theme_minimal(base_size = 18)+
+  theme(legend.position = 'right', # Позиція легенди
+        panel.border = element_rect(color = 'black', fill = NA, size = 1))  # Додання рамки
+
 library(patchwork)
 
-# Create labels for each plot
-pscree <- pscree + ggtitle("A") + theme(plot.title = element_text(hjust = -0.1, size = 18))
-ppairs <- ppairs + ggtitle("B") + theme(plot.title = element_text(hjust = -0.1, size = 18))
-ploadings <- ploadings + ggtitle("C") + theme(plot.title = element_text(hjust = -0.1, size = 18))
-pbiplot <- pbiplot + ggtitle("D") + theme(plot.title = element_text(hjust = -0.1, size = 18))
+# Додаємо заголовки до кожного графіка
+pscree <- pscree + ggtitle("A Scree plot") + theme(plot.title = element_text(face = "bold", hjust = -0.01, size = 18))
+ploadings <- ploadings + ggtitle("B Loading plot") + theme(plot.title = element_text(face = "bold", hjust = -0.01, size = 18))
+pbiplot <- pbiplot + ggtitle("C Bi-plot") + theme(plot.title = element_text(face = "bold", hjust = -0.01, size = 18))
+pkmean <- pkmean + ggtitle("D K-means Clusters") + theme(plot.title = element_text(face = "bold", hjust = -0.01, size = 18))
+ppairs <- ppairs + ggtitle("E Pairs plot") + theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18))
 
-# Combine the plots in a 2x2 grid
-combined_plot <- (pscree | ppairs) / (ploadings | pbiplot)
+# Комбінування графіків у сітку
+combined_plot <- (pscree | ploadings) / (pbiplot | pkmean) / ppairs
 
 
 ggsave("./figs/combined_plot.png", combined_plot, width = 20, height = 30)
-# ggsave("./figs/pca_screen_plot.png", plot = screen_plot, width = 8, height = 10)
-# ggsave("./figs/pca_bi_plot.png", plot = bi_plot, width = 8, height = 10)
+
+knitr::include_graphics("./figs/combined_plot.png")
 ```
 
 ```{r enrichr}
