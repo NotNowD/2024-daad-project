@@ -1,17 +1,33 @@
 ---
 title: "Analysis"
-author: "K-6"
-date: "2024-08-14"
-output: html_document
-editor_options: 
-  chunk_output_type: inline
+author: "K-6: Данило Кравчук (завантаження даних, DESeq, Функц. аналіз)
+              Лев Кравчук (PCA, Функц. аналіз)"
+#date: "2024-08-14"
+output:
+  html_document:
+    code_folding: "hide"               # Сховати код за замовчуванням
+    code_download: FALSE               # Вимкнути можливість завантаження коду
+    #highlight: "github"                # Синтаксичне підсвічування коду
+    toc: TRUE                          # Додати зміст
+    toc_float: TRUE                    # Плаваючий зміст
+    toc_depth: 2                       # Глибина заголовків у змісті
+    # number_sections: TRUE              # Нумерація розділів
+    # theme: cerulean                    # Тема для стилю (можна вибрати інші теми)
+    css: styles.css
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["fontspec"]
+mainfont: "Times New Roman"
 ---
+<p></p>
+<span style="font-size:24px;">[GitHub](https://github.com/NotNowD/2024-daad-project.git)</span>
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r library, include=FALSE}
+```{r library, include=FALSE, error=FALSE, message=FALSE}
+library(knitr)
 library(readr)
 library(tidyverse)
 library(ggrepel)
@@ -32,15 +48,26 @@ library(enrichR)
 library(KEGGREST)
 library(pathview)
 library(biomaRt)
+library(patchwork)
+library(ggfortify)
 
 walk(c("select", "filter", "count", "rename"), ~ conflict_prefer(.x, "dplyr")) # walk з purr
 ```
+# Мета
+Для аналізу диференційної експресії генів було обрано клітини лінії А549 як біологічний об'єкт.
+Клітини лінії A549 — це клітини недрібноклітинної (NSCLC) аденокарциноми легень.
 
-```{r data}
-# Список проєктів у кеші
+# Завантаження даних
+
+Дані було отримано з бази даних GEO (Gene Expression Omnibus). Завантажені дані описують експеримент з секвенуванням РНК (RNA-sequencing) на опромінених рентгенівським випромінюванням і контрольних клітинах A549.
+
+Клітини A549 були піддані одноразовій дозі рентгенівського опромінення 2Гр або 4Гр за допомогою приладу X-RAD 160-225. Після опромінення клітини A549 (з одноразовою дозою опромінення), а також неопромінені клітини A549 були інкубовані ще 48 годин. Після цього було зібрано загальну РНК для високопродуктивного секвенування. 
+Загальний дизайн експерименту: дослідження 3 умов по 3 репліки. Три групи: група 0Гр (контроль), група 2Гр та група 4Гр.
+
+Відповідна стаття: doi: 10.1038/s41419-022-04561-x, PMID: 35190532.
+```{r data, echo=FALSE, message=FALSE}
 projects <- recount3::available_projects()
 
-# Завантаження проєкту з хмари або з кешу
 if ("SRP174505" %in% projects) {
   rse <- recount3::create_rse_manual(
     project = "SRP174505",
@@ -60,11 +87,11 @@ if ("SRP174505" %in% projects) {
   )
 }
 
-rse
 rse_filtered <- rse[rowData(rse)$gene_type == "protein_coding", ]
 ```
+## Дані експерименту та метадані {.tabset}
 
-```{r rse export}
+```{r rse export, include=FALSE, message=FALSE}
 rse_colData<- as.data.frame(colData(rse))
 rse_rowData<- as.data.frame(rowData(rse))
 rse_assay <- as.data.frame(assay(rse))
@@ -82,6 +109,7 @@ make_unique_names <- function(df, id_col, name_col) {
     column_to_rownames(var = name_col)
 }
 
+
 write_delim(rse_colData, "./data/rse_colData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_rowData, "./data/rse_rowData.csv", delim = ";", col_names = TRUE)
 write_delim(rse_assay, "./data/rse_assay.csv", delim = ";", col_names = TRUE)
@@ -89,9 +117,25 @@ write_delim(rse_colData_f, "./data/rse_colData_filtered.csv", delim = ";", col_n
 write_delim(rse_rowData_f, "./data/rse_rowData_filtered.csv", delim = ";", col_names = TRUE)
 write_delim(rse_assay_f, "./data/rse_assay_filtered.csv", delim = ";", col_names = TRUE)
 ```
+### Метадані зразків {.tabset}
+```{r}
+kable(rse_colData_f |> 
+  select(external_id, sra.study_title, sra.sample_title) |>  head(), format = "html", table.attr = "class='table table-striped'")
+```
+### Метадані генів {.tabset}
+```{r}
+kable(head(rse_rowData_f), format = "html", table.attr = "class='table table-striped'")
+```
+### Матриця експресії {.tabset}
+```{r}
+kable(rse_assay_f |> 
+  arrange(desc(SRR8371688)) |> head(), format = "html", table.attr = "class='table table-striped'")
+```
 
- Колонка "sra.sample_title" вказує на зразки, які є контрольними (0Gy) та ті, що зазнали опромінення (2Gy, 4Gy).
-```{r pre-analysis visualisation}
+
+## Попередня візуалізація даних
+Побудовано графік щільності для окремого зразка (SRR8371688) та гістограму частоти значень експресії
+```{r pre-analysis visualisation, warning=FALSE}
 # Створення таблиці метаданих
 colData_new <- data.frame(
   row.names = colnames(rse_filtered),
@@ -103,7 +147,8 @@ countData <- assay(rse_filtered)
 
 # Побудова графіку щільності
 p1 <- ggplot(countData, aes(x = SRR8371688 )) +
-  geom_density(color = "darkblue", fill = "lightblue")
+  geom_density(color = "darkblue", fill = "lightblue") +
+  xlim(0, 10e4)
 
 count_summary <- countData |>
   as.vector() |>
@@ -122,14 +167,15 @@ p2 <- ggplot(count_summary[1:200,], aes(x = counts, y = frequency, fill = freque
        y = "Frequency (log10)") +
   scale_fill_gradient(low = "#AA05BA", high = "#56B1F7") +
   theme_minimal()
-p1
-p2
+#p1
+#p2
 counts_info <- p1 + p2
 
 ggsave("./figs/counts_info.png", plot = counts_info, width = 16, height = 6, dpi = 300)
+knitr::include_graphics("./figs/counts_info.png")
 ```
 
-```{r deseq}
+```{r deseq, echo=FALSE, include=FALSE}
 # Створіть DESeqDataSet
 dds <- DESeqDataSetFromMatrix(countData = countData,
                               colData = colData_new,
@@ -140,9 +186,10 @@ vsd <- vst(dds, blind = FALSE)
 # Отримання матриці нормалізованих значень
 vst_data <- assay(vsd)
 ```
-
-Differential testing: multigroup
-```{r}
+# Аналіз диференційної експресії генів
+## DESeq
+Для аналізу диференційної експресії генів було застосовано DESeq Wald
+```{r deseq_wald_test, echo=FALSE, message=FALSE}
 dds_wald <- dds[rowSums(counts(dds)) > 0, ]
 
 dds_wald <- DESeq(dds, test="Wald")
@@ -156,7 +203,7 @@ res_wald_df <- as.data.frame(res_sig_wald )
 
 # Додавання груп, виходячи з напрямку log2FoldChange
 res_wald_df$condition <- ifelse(res_wald_df$log2FoldChange > 0, "Upregulated", "Downregulated")
-
+head(res_wald_df) |> view()
 # Побудова MA-графіка
 pl2 <- ggplot(res_wald_df, aes(x = baseMean, y = log2FoldChange, color = condition)) +
   geom_point(alpha = 0.4, size = 1.5) +
@@ -168,61 +215,67 @@ pl2 <- ggplot(res_wald_df, aes(x = baseMean, y = log2FoldChange, color = conditi
     legend.title = element_blank(),
     plot.background = element_rect(fill = "white"),
     panel.background = element_rect(fill = "white"))
-pl2
+#pl2
 ggsave("./figs/deseq_wald_test.png", plot = pl2, width = 16, height = 6, dpi = 300)
 ```
-
-```{r}
+## Коригування p.adj
+Додатково було проведено коригування на хибний позитивний результат p.adj (FDR). Нижче наведено відповідний графік
+```{r padj, message=FALSE, warning=FALSE}
 res_wald_2Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "2Gy", "0Gy"))
-res_wald_2Gy_vs_0Gy$padj <- p.adjust(res_wald$pvalue, method = "fdr")
 res_wald_4Gy_vs_0Gy <- results(dds_wald, contrast = c("condition", "4Gy", "0Gy"))
-res_wald_4Gy_vs_0Gy$padj <- p.adjust(res_wald$pvalue, method = "fdr")
 res_wald_4Gy_vs_2Gy <- results(dds_wald, contrast = c("condition", "4Gy", "2Gy"))
-res_wald_4Gy_vs_2Gy$padj <- p.adjust(res_wald$pvalue, method = "fdr")
 
-hist_data <- bind_rows(
+hist_data_before <- bind_rows(
   data.frame(padj = res_wald_2Gy_vs_0Gy$padj, Comparison = "2Gy vs 0Gy"),
   data.frame(padj = res_wald_4Gy_vs_0Gy$padj, Comparison = "4Gy vs 0Gy"),
   data.frame(padj = res_wald_4Gy_vs_2Gy$padj, Comparison = "4Gy vs 2Gy")
 )
 
-# Побудова графіка
-ggplot(hist_data, aes(x = padj, fill = Comparison, color = Comparison)) +
+res_wald_2Gy_vs_0Gy$padj <- p.adjust(res_wald_2Gy_vs_0Gy$pvalue, method = "fdr")
+res_wald_4Gy_vs_0Gy$padj <- p.adjust(res_wald_4Gy_vs_0Gy$pvalue, method = "fdr")
+res_wald_4Gy_vs_2Gy$padj <- p.adjust(res_wald_4Gy_vs_2Gy$pvalue, method = "fdr")
+
+hist_data_after <- bind_rows(
+  data.frame(padj = res_wald_2Gy_vs_0Gy$padj, Comparison = "2Gy vs 0Gy"),
+  data.frame(padj = res_wald_4Gy_vs_0Gy$padj, Comparison = "4Gy vs 0Gy"),
+  data.frame(padj = res_wald_4Gy_vs_2Gy$padj, Comparison = "4Gy vs 2Gy")
+)
+
+deseq_Wald_padj_b <- ggplot(hist_data_before, aes(x = padj, fill = Comparison, color = Comparison)) +
   geom_density(alpha = 0.2, adjust = 1.5) + # Криві густини
   scale_fill_manual(values = c("2Gy vs 0Gy" = "red", "4Gy vs 0Gy" = "blue", "4Gy vs 2Gy" = "forestgreen")) +
   scale_color_manual(values = c("2Gy vs 0Gy" = "red", "4Gy vs 0Gy" = "blue", "4Gy vs 2Gy" = "forestgreen")) +
   labs(title = "Розподіл коригованих p-значень", x = "p-значення", y = "Щільність") +
-  geom_vline(xintercept = 0.05, linetype = "dashed", color = "black") + # Вертикальна лінія
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "black") +
+  annotate("text", x = 0.05, y = Inf, label = "0.05", vjust = 1.5, hjust = -0.1, color = "black") +
   theme_minimal()
 
-ggplot(hist_data, aes(x = padj, fill = Comparison)) +
-  geom_histogram(position = "dodge", binwidth = 0.01, color = "black", alpha = 0.7) +
-  scale_fill_manual(values = c("2Gy vs 0Gy" = "red", "4Gy vs 0Gy" = "blue", "4Gy vs 2Gy" = "green")) +
-  labs(title = "Розподіл коригованих p-значень", x = "p-значення", y = "Частота") +
-  geom_vline(xintercept = 0.05, linetype = "dashed", color = "black") + # Вертикальна лінія
+deseq_Wald_padj_a <- ggplot(hist_data_after, aes(x = padj, fill = Comparison, color = Comparison)) +
+  geom_density(alpha = 0.2, adjust = 1.5) + # Криві густини
+  scale_fill_manual(values = c("2Gy vs 0Gy" = "red", "4Gy vs 0Gy" = "blue", "4Gy vs 2Gy" = "forestgreen")) +
+  scale_color_manual(values = c("2Gy vs 0Gy" = "red", "4Gy vs 0Gy" = "blue", "4Gy vs 2Gy" = "forestgreen")) +
+  labs(title = "Розподіл коригованих p-значень", x = "p-значення", y = "Щільність") +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "black") +
+  annotate("text", x = 0.05, y = Inf, label = "0.05", vjust = 1.5, hjust = -0.1, color = "black") +
   theme_minimal()
+
+deseq_Wald_padj <- deseq_Wald_padj_b + deseq_Wald_padj_a
+ggsave("./figs/deseq_Wald_padj.png", plot = deseq_Wald_padj, width = 16, height = 6, dpi = 300)
+knitr::include_graphics("./figs/deseq_Wald_padj.png")
 ```
 
+## Volcano plot {.tabset}
+Для візуалізації у зміні експресії генів для випадку опромінення рентгеном 2Гр (порівняння з контролнм) та 4Гр  (порівняння з контролнм) побудовано volcano plot. Окремо проводилось порівняння експресії генів при опроміненні 2Гр та 4Гр.
+```{r deseq visualization Wald, message=FALSE}
 
+# png("./figs/deseq_Wald.png", width = 2400, height = 800)
+# par(mfrow = c(1, 3), mar = c(5, 5, 4, 2))
 
-```{r deseq visualization Wald}
-
-png("./figs/deseq_Wald_padj.png", width = 2400, height = 800)
-par(mfrow = c(1, 3), mar = c(5, 5, 4, 2))
-hist(res_wald_2Gy_vs_0Gy$padj, col = "grey50", border = "white", main = "2Gy vs 0Gy", xlab = "p-values")
-hist(res_wald_4Gy_vs_0Gy$padj, col = "grey50", border = "white", main = "4Gy vs 0Gy", xlab = "p-values")
-hist(res_wald_4Gy_vs_2Gy$padj, col = "grey50", border = "white", main = "4Gy vs 2Gy", xlab = "p-values")
-dev.off()
-knitr::include_graphics("./figs/deseq_Wald_padj.png")
-
-png("./figs/deseq_Wald.png", width = 2400, height = 800)
-par(mfrow = c(1, 3), mar = c(5, 5, 4, 2))
-
-plotMA(res_wald_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
-plotMA(res_wald_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
-plotMA(res_wald_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
-dev.off()
-knitr::include_graphics("./figs/deseq_Wald.png")
+# plotMA(res_wald_2Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 2Gy")
+# plotMA(res_wald_4Gy_vs_0Gy, ylim=c(-30,30), main="MA-plot: 0Gy vs 4Gy")
+# plotMA(res_wald_4Gy_vs_2Gy, ylim=c(-30,30), main="MA-plot: 2Gy vs 4Gy")
+# dev.off()
+# knitr::include_graphics("./figs/deseq_Wald.png")
 
 res_wald_df_2Gy_vs_0Gy <- as.data.frame(res_wald_2Gy_vs_0Gy)
 res_wald_df_2Gy_vs_0Gy$significant <- res_wald_df_2Gy_vs_0Gy$padj < 0.05
@@ -260,8 +313,8 @@ plot_2Gy_vs_0Gy_W <- EnhancedVolcano(res_wald_df_2Gy_vs_0Gy,
                                    ylim = c(0, 10),
                                    pCutoff = 0.05,
                                    FCcutoff = 1.5,
-                                   pointSize = 1.5,
-                                   labSize = 2.0,
+                                   pointSize = 5,
+                                   labSize = 6,
                                    col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
                                    title = '2Gy vs 0Gy',
                                    legendPosition = 'top')
@@ -274,8 +327,8 @@ plot_4Gy_vs_0Gy_W <- EnhancedVolcano(res_wald_df_4Gy_vs_0Gy,
                                    ylim = c(0, 10),
                                    pCutoff = 0.05,
                                    FCcutoff = 1.5,
-                                   pointSize = 1.5,
-                                   labSize = 2.0,
+                                   pointSize = 5,
+                                   labSize = 6,
                                    col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
                                    title = '4Gy vs 0Gy',
                                    legendPosition = 'top')
@@ -288,18 +341,37 @@ plot_4Gy_vs_2Gy_W <- EnhancedVolcano(res_wald_df_4Gy_vs_2Gy,
                                    ylim = c(0, 10),
                                    pCutoff = 0.05,
                                    FCcutoff = 1.5,
-                                   pointSize = 1.5,
-                                   labSize = 2.0,
+                                   pointSize = 5,
+                                   labSize = 6,
                                    col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
                                    title = '4Gy vs 2Gy',
                                    legendPosition = 'top')
 volc_wald_plot <- plot_2Gy_vs_0Gy_W + plot_4Gy_vs_0Gy_W + plot_4Gy_vs_2Gy_W + plot_layout(nrow = 1)
 
-print(volc_wald_plot)
+#print(volc_wald_plot)
 ggsave("./figs/volc_wald.png", plot = volc_wald_plot, width = 20, height = 6, dpi = 300)
 ```
+### 2Gy vs 0Gy
+```{r}
+ggsave("./figs/volc_plot_2Gy_vs_0Gy.png", plot = plot_2Gy_vs_0Gy_W, width = 20, height = 20, dpi = 300)
+knitr::include_graphics("./figs/volc_plot_2Gy_vs_0Gy.png")
+```
 
-```{r upset}
+### 4Gy vs 0Gy
+```{r}
+ggsave("./figs/volc_plot_4Gy_vs_0Gy.png", plot = plot_4Gy_vs_0Gy_W, width = 20, height = 20, dpi = 300)
+knitr::include_graphics("./figs/volc_plot_4Gy_vs_0Gy.png")
+```
+
+### 4Gy vs 2Gy
+```{r}
+ggsave("./figs/volc_plot_4Gy_vs_2Gy.png", plot = plot_4Gy_vs_2Gy_W, width = 20, height = 20, dpi = 300)
+knitr::include_graphics("./figs/volc_plot_4Gy_vs_2Gy.png")
+```
+
+## Upset
+Для візуалізації перекриття між списками генів, які є статистично значущими (з коригованим p-значенням < 0.05) та мають великий зсув логарифмічних змін (log2FoldChange > 1.5 для підвищеної експресії та log2FoldChange < -1.5 для зниженої експресії) у різних порівняннях, використали upset plot.
+```{r upset, results="hide", message=FALSE, warning=FALSE}
 res_2Gy_0Gy_up <- res_wald_df_2Gy_vs_0Gy |> as.data.frame() |> filter(pvalue < 0.05 & log2FoldChange > 1.5)
 res_2Gy_0Gy_down <- res_wald_df_2Gy_vs_0Gy  |> as.data.frame() |> filter(pvalue < 0.05 & log2FoldChange < -1.5)
 res_4Gy_0Gy_up <- res_wald_df_4Gy_vs_0Gy  |> as.data.frame() |> filter(pvalue < 0.05 & log2FoldChange > 1.5)
@@ -316,14 +388,23 @@ venn_list <- list("2Gy vs 0Gy(up)" = res_2Gy_0Gy_up$gene_name,
 
 ven <- venndetail(venn_list)
 
-png("./figs/venn_diagram.png", width = 1600, height = 1600, res = 300)
+png("./figs/upset_diagram.png", width = 1600, height = 1600, res = 300)
 plot(ven, type = "upset")
 dev.off()
-knitr::include_graphics("./figs/venn_diagram.png")
+```
+```{r, echo=FALSE}
+knitr::include_graphics("./figs/upset_diagram.png")
 ```
 
-
-```{r PCA}
+# Аналіз головних компонент (PCA)
+Наступним кроком було проведено PCA аналіз.
+Scree plot 
+Червона лінія відображає кумулятивну суму варіацій, яка показує, що 80% варіації даних припадає на п'ять головних компонент. При цьому PC1 пояснює близько 50% варіації.
+Для того, щоб визначити кількість головних компонент, які варто зберегти для аналізу були використані метод Горна та elbow, які зображені на графіку штриховою лінією.
+Biplot комбінує інформацію про зразки і змінні в одному графіку. По осях зображені дві головні компоненти: PC1 і PC2, кожна з яких пояснює відсоток варіації в даних: PC1 — 44.98%, PC2 — 12.94%. Точки відповідають різним спостереженням за умов випромінювання X-хвилями 0Гр, 2Гр, 4Гр, які приблизно кластеризуються відповідно умовам впливу. 
+Щоб перевірити чи є "правильна" кластеризація експериментів, був проведений кластерний аналіз методом k-means з 5-ма головними компонентами, адже саме стільки компонент пояснюють більшу варіацію даних.
+Loadings plot показуює, наскільки кожен ген впливає на кожну головну компоненту. Це значення визначає, наскільки цей ген сприяє поясненню варіації в даних.
+```{r PCA, message=FALSE, warning=FALSE}
 
 vst_data <- assay(vst(dds_wald))
 
@@ -396,11 +477,14 @@ ploadings <- PCAtools::plotloadings(pca_result,
     labSize = 3,
     returnPlot = FALSE)
 
+pca_df <- as.data.frame(pca_result$rotated)
+
+# Додаємо інформацію про condition та інші метадані
+pca_df$condition <- colData_new$condition
 
 # Використовуємо більше компонент для кластеризації, наприклад, перші 5
 set.seed(1234)
 km <- kmeans(x = pca_df[, 1:5], centers = 3, nstart = 25)  # Використовуємо 5 компонент і 25 запусків
-
 # Додаємо результати кластеризації в датафрейм
 pca_df$cluster <- as.factor(km$cluster)
 
@@ -415,7 +499,6 @@ pkmean <- autoplot(km, data = pca_df, frame = TRUE, frame.type = 'norm', size = 
   theme(legend.position = 'right', # Позиція легенди
         panel.border = element_rect(color = 'black', fill = NA, size = 1))  # Додання рамки
 
-library(patchwork)
 
 # Додаємо заголовки до кожного графіка
 pscree <- pscree + ggtitle("A Scree plot") + theme(plot.title = element_text(face = "bold", hjust = -0.01, size = 18))
@@ -433,9 +516,15 @@ ggsave("./figs/combined_plot.png", combined_plot, width = 20, height = 30)
 knitr::include_graphics("./figs/combined_plot.png")
 ```
 
-```{r enrichr}
+# Функціональний аналіз
+
+Після проведення аналізу диференційної експресії було визначено роль цих генів в клітинах.
+Для цього було проведено аналіз збагачення за допомогою Enrichr
+
+## Функціональний аналіз Enrichr {.tabset}
+```{r enrichr,echo=FALSE, include=FALSE,results="hide", message=FALSE, warning=FALSE}
 dbs <- listEnrichrDbs()
-print(head(dbs))
+# print(head(dbs))
 
 databases <- c("KEGG_2021_Human", "GO_Biological_Process_2021", "Reactome_2022", "WikiPathways_2023_Human")
 
@@ -444,10 +533,10 @@ enrichr_results_4Gy_0Gy_up <- enrichr(res_4Gy_0Gy_up$gene_name, databases)
 enrichr_results_4Gy_2Gy_up <- enrichr(res_4Gy_2Gy_up$gene_name, databases)
 enrichr_results_all_up <- enrichr(unique(c(res_2Gy_0Gy_up$gene_name, res_4Gy_0Gy_up$gene_name, res_4Gy_2Gy_up$gene_name)), databases)
 
-head(enrichr_results_2Gy_0Gy_up)
-head(enrichr_results_4Gy_0Gy_up)
-head(enrichr_results_4Gy_2Gy_up)
-head(enrichr_results_all_up)
+# head(enrichr_results_2Gy_0Gy_up)
+# head(enrichr_results_4Gy_0Gy_up)
+# head(enrichr_results_4Gy_2Gy_up)
+# head(enrichr_results_all_up)
 
 # # Збереження результатів у CSV-файли
 # write.csv(enrichr_results_2Gy_0Gy_up, "./data/enrichr_results_2Gy_vs_0Gy_up.csv")
@@ -503,8 +592,28 @@ ggsave("./figs/enrichr_results_4Gy_2Gy_up.png", plot = enrichr_results_4Gy_2Gy_u
 ggsave("./figs/enrichr_results_all_up.png", plot = enrichr_results_all_up, width = 20, height = 20, dpi = 300)
 ```
 
-
+### Узагальнене {.tabset}
 ```{r}
+knitr::include_graphics("./figs/enrichr_results_all_up.png")
+```
+
+### 2Gy 0Gy {.tabset}
+```{r}
+knitr::include_graphics("./figs/enrichr_results_2Gy_0Gy_up.png")
+```
+
+### 4Gy 0Gy {.tabset}
+```{r}
+knitr::include_graphics("./figs/enrichr_results_4Gy_0Gy_up.png")
+```
+
+### 4Gy 2Gy {.tabset}
+```{r}
+knitr::include_graphics("./figs/enrichr_results_4Gy_2Gy_up.png")
+```
+
+
+```{r ensembl, include=FALSE, echo=FALSE}
 path_4Gy_vs_0Gy <- res_wald_df_4Gy_vs_0Gy  |> as.data.frame() |> filter(pvalue < 0.05 & abs(log2FoldChange) > 1.5)
 
 
@@ -528,8 +637,9 @@ path_4Gy_vs_0Gy <- merge(path_4Gy_vs_0Gy, entrez_ids, by.x = "genes_of_interest"
 head(path_4Gy_vs_0Gy)
 
 ```
-
-```{r}
+## Аналіз метаболічних шляхів за допомогою Pathview {.tabset}
+Для того, щоб явно побачити роль генів з підвищеною та зі зниженою експресією у клітинах лінії А549 було проведено аналіз метаболічних шляхів циклу клітини, проліферації, апоптозу.
+```{r pathview, message=FALSE, warning=FALSE}
 logFC <- path_4Gy_vs_0Gy$log2FoldChange
 names(logFC) <- path_4Gy_vs_0Gy$entrezgene_id
 
@@ -539,39 +649,57 @@ pathview(gene.data = logFC,
          species = "hsa", 
          #kegg.native = T
          ut.suffix = "Non-small cell lung cancer (специфічно для A549)")
-knitr::include_graphics("hsa05207.pathview.png")
 
 pathview(gene.data = logFC, 
          pathway.id = "hsa04110", 
          species = "hsa", 
          #kegg.native = T
          ut.suffix = "Cell cycle")
-knitr::include_graphics("hsa04110.pathview.png")
 
 pathview(gene.data = logFC, 
          pathway.id = "hsa04115", 
          species = "hsa", 
          #kegg.native = T
          ut.suffix = "p53 signaling pathway")
-knitr::include_graphics("hsa04115.pathview.png")
-```
 
-```{r}
 pathview(gene.data = logFC, 
          pathway.id = "hsa04725", 
          species = "hsa", 
          #kegg.native = T
          ut.suffix = "NAChR")
-knitr::include_graphics("hsa04725.pathview.png")
 
 pathview(gene.data = logFC, 
          pathway.id = "hsa04210", 
          species = "hsa", 
          #kegg.native = T
          ut.suffix = "Apoptosis")
-knitr::include_graphics("hsa04210.pathview.png")
-
 ```
 
+
+### Канцерогенез {.tabset}
+```{r}
+knitr::include_graphics("hsa05207.pathview.png")
+```
+
+### Клітинний цикл {.tabset}
+```{r}
+knitr::include_graphics("hsa04110.pathview.png")
+```
+
+### р53 сигнальний шлях {.tabset}
+```{r}
+knitr::include_graphics("hsa04115.pathview.png")
+```
+
+### Апоптоз {.tabset}
+```{r}
+knitr::include_graphics("hsa04210.pathview.png")
+```
+
+### Холінергічний синапс {.tabset}
+```{r}
+knitr::include_graphics("hsa04725.pathview.png")
+```
+## {-}
 
 
