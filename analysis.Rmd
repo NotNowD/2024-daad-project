@@ -1,7 +1,6 @@
 ---
 title: "Analysis"
-author: "K-6: Данило Кравчук (завантаження даних, DESeq, Функц. аналіз)
-              Лев Кравчук (PCA, Функц. аналіз)"
+author: "K-6:"
 #date: "2024-08-14"
 output:
   html_document:
@@ -19,6 +18,9 @@ output:
     extra_dependencies: ["fontspec"]
 mainfont: "Times New Roman"
 ---
+<p></p>
+Виконавці: Данило Кравчук (завантаження даних, DESeq, Функц. аналіз)
+           Лев Кравчук (PCA, Функц. аналіз)
 <p></p>
 <span style="font-size:24px;">[GitHub](https://github.com/NotNowD/2024-daad-project.git)</span>
 
@@ -528,15 +530,15 @@ dbs <- listEnrichrDbs()
 
 databases <- c("KEGG_2021_Human", "GO_Biological_Process_2021", "Reactome_2022", "WikiPathways_2023_Human")
 
-enrichr_results_2Gy_0Gy_up <- enrichr(res_2Gy_0Gy_up$gene_name, databases)
-enrichr_results_4Gy_0Gy_up <- enrichr(res_4Gy_0Gy_up$gene_name, databases)
-enrichr_results_4Gy_2Gy_up <- enrichr(res_4Gy_2Gy_up$gene_name, databases)
-enrichr_results_all_up <- enrichr(unique(c(res_2Gy_0Gy_up$gene_name, res_4Gy_0Gy_up$gene_name, res_4Gy_2Gy_up$gene_name)), databases)
+# enrichr_results_2Gy_0Gy_up <- enrichr(res_2Gy_0Gy_up$gene_name, databases)
+# enrichr_results_4Gy_0Gy_up <- enrichr(res_4Gy_0Gy_up$gene_name, databases)
+# enrichr_results_4Gy_2Gy_up <- enrichr(res_4Gy_2Gy_up$gene_name, databases)
+# enrichr_results_all_up <- enrichr(unique(c(res_2Gy_0Gy_up$gene_name, res_4Gy_0Gy_up$gene_name, res_4Gy_2Gy_up$gene_name)), databases)
 
-# head(enrichr_results_2Gy_0Gy_up)
-# head(enrichr_results_4Gy_0Gy_up)
-# head(enrichr_results_4Gy_2Gy_up)
-# head(enrichr_results_all_up)
+enrichr_results_2Gy_0Gy_up <- lapply(enrichr(res_2Gy_0Gy_up$gene_name, databases), function(x) head(x, 30))
+enrichr_results_4Gy_0Gy_up <- lapply(enrichr(res_4Gy_0Gy_up$gene_name, databases), function(x) head(x, 30))
+enrichr_results_4Gy_2Gy_up <- lapply(enrichr(res_4Gy_2Gy_up$gene_name, databases), function(x) head(x, 30))
+enrichr_results_all_up <- lapply(enrichr(unique(c(res_2Gy_0Gy_up$gene_name, res_4Gy_0Gy_up$gene_name, res_4Gy_2Gy_up$gene_name)), databases), function(x) head(x, 30))
 
 # # Збереження результатів у CSV-файли
 # write.csv(enrichr_results_2Gy_0Gy_up, "./data/enrichr_results_2Gy_vs_0Gy_up.csv")
@@ -567,7 +569,7 @@ plot_enrichr_barplot <- function(enrichr_result, title) {
            fill = "-log10(Adjusted P.value)") +
       scale_fill_viridis_c(option = "inferno")  +
       theme_minimal() +
-      theme(axis.text.y = element_text(size = 7),  # Розмір шрифта для заголовка легенди
+      theme(axis.text.y = element_text(size = 12),  # Розмір шрифта для заголовка легенди
             plot.margin = margin(10, 10, 10, 10),   # Збільшити відступи навколо графіка
             panel.background = element_rect(fill = "white"), # Білий фон панелі
             plot.background = element_rect(fill = "white"),  # Білий фон графіка
